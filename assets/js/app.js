@@ -1,9 +1,9 @@
 import {findJournalsByName} from "./journal-search.js";
 import {evaluateJournal} from "./eligibility.js";
-import {journalAssessmentHTML,journalCriteriaHTML,comparisonHTML} from "./criteria-ui.js?v=20261117capes170";
+import {journalAssessmentHTML,journalCriteriaHTML,comparisonHTML} from "./criteria-ui.js?v=20261117scopus";
 import {metricLabels,filterIds,metrics,matchesCriteria,metricText,csvCell,researchPolicy} from "./criteria.js";
 const currentCriteria=()=>Object.fromEntries(filterIds.map(id=>[id,document.getElementById(id)?.value||""]));
-const DATA_URL="./assets/data/revistas.json";const $=id=>document.getElementById(id);const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));const fmt=v=>v===null||v===undefined||v===""?"Não informado":String(v);const safeUrl=u=>{try{const x=new URL(u);return ["https:","http:"].includes(x.protocol)?x.href:""}catch{return""}};let ALL=[],BASE="",SELECTED=new Set();function field(r,k){return r[k]??null}function priority(r){return {"ALTO":0,"MÉDIO":1,"COMPLEMENTAR":2}[r.tier]??3}let CATALOG_TOP10=false,CATALOG_VISIBLE=6;
+const DATA_URL="./assets/data/revistas.json";const $=id=>document.getElementById(id);const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));const fmt=v=>v===null||v===undefined||v===""?"Não informado":String(v);const safeUrl=u=>{try{const x=new URL(u);return ["https:","http:"].includes(x.protocol)?x.href:""}catch{return""}};let ALL=[],BASE="",SELECTED=new Set();function field(r,k){return r[k]??null}function priority(r){return {"ALTO":0,"MÉDIO":1,"COMPLEMENTAR":2}[r.tier]??3}let CATALOG_TOP10=false,CURRENT_PAGE=1,PER_PAGE=24;
 const isSelection=r=>!r.criterioPlanilha||r.criterioPlanilha.status==="selecao";
 const selectionCatalog=()=>ALL.filter(isSelection);
 function matchesCost(r,filter){
@@ -16,6 +16,55 @@ function matchesCost(r,filter){
 }
 function compactCost(r){return r.acordoCapes===true?"Acordo CAPES: cobertura condicionada":({sem_apc:"Sem APC",rota_assinatura:"Rota de assinatura",apc:"Com taxa",confirmar:"Valor a confirmar"}[r.modeloCusto]||"Valor a confirmar")}
 function compactStatus(r){return r.statusConferencia==='Em conferência'?'Em conferência':({selecao:"Na seleção",abaixo:"Fora do recorte",confirmar:"A confirmar"}[r.criterioPlanilha?.status]||"A confirmar")}
+function renderPagination(total,perPage,totalPages){
+  const pagination=$("catalog-pagination");
+  if(!pagination)return;
+  if(total===0){pagination.hidden=true;return;}
+  pagination.hidden=false;
+  const summary=$("pagination-summary");
+  if(summary){
+    if(perPage>=total){
+      summary.textContent="Mostrando todas as "+total+" revistas";
+    }else{
+      const start=(CURRENT_PAGE-1)*perPage+1;
+      const end=Math.min(CURRENT_PAGE*perPage,total);
+      summary.textContent="Mostrando "+start+"–"+end+" de "+total+" revistas (Página "+CURRENT_PAGE+" de "+totalPages+")";
+    }
+  }
+  const firstBtn=$("pagination-first"),prevBtn=$("pagination-prev"),nextBtn=$("pagination-next"),lastBtn=$("pagination-last");
+  const isFirst=CURRENT_PAGE<=1,isLast=CURRENT_PAGE>=totalPages;
+  if(firstBtn){firstBtn.disabled=isFirst;firstBtn.setAttribute("aria-disabled",String(isFirst));}
+  if(prevBtn){prevBtn.disabled=isFirst;prevBtn.setAttribute("aria-disabled",String(isFirst));}
+  if(nextBtn){nextBtn.disabled=isLast;nextBtn.setAttribute("aria-disabled",String(isLast));}
+  if(lastBtn){lastBtn.disabled=isLast;lastBtn.setAttribute("aria-disabled",String(isLast));}
+  const numbersWrap=$("pagination-numbers");
+  if(numbersWrap){
+    numbersWrap.replaceChildren();
+    if(totalPages>1){
+      const pagesToDisplay=[];
+      if(totalPages<=7){
+        for(let i=1;i<=totalPages;i++)pagesToDisplay.push(i);
+      }else{
+        pagesToDisplay.push(1);
+        if(CURRENT_PAGE>4)pagesToDisplay.push("...");
+        const start=Math.max(2,CURRENT_PAGE-1),end=Math.min(totalPages-1,CURRENT_PAGE+1);
+        for(let i=start;i<=end;i++){if(!pagesToDisplay.includes(i))pagesToDisplay.push(i);}
+        if(CURRENT_PAGE<totalPages-3)pagesToDisplay.push("...");
+        if(!pagesToDisplay.includes(totalPages))pagesToDisplay.push(totalPages);
+      }
+      pagesToDisplay.forEach(item=>{
+        if(item==="..."){
+          const span=document.createElement("span");span.className="pagination-ellipsis";span.textContent="…";span.setAttribute("aria-hidden","true");numbersWrap.append(span);
+        }else{
+          const btn=document.createElement("button");btn.type="button";btn.className="pagination-btn pagination-num"+(item===CURRENT_PAGE?" active":"");btn.textContent=String(item);btn.setAttribute("aria-label","Ir para a página "+item);
+          if(item===CURRENT_PAGE)btn.setAttribute("aria-current","page");
+          btn.onclick=()=>{CURRENT_PAGE=item;render();$("revistas")?.scrollIntoView({behavior:"smooth",block:"start"});};
+          numbersWrap.append(btn);
+        }
+      });
+    }
+  }
+}
 function render(){
   let arr=searchCatalog();
   const order=$("ord").value;
@@ -23,12 +72,20 @@ function render(){
   if(CATALOG_TOP10)arr=arr.filter(r=>isSelection(r)&&r.citescore!==null&&r.citescore!==""&&Number.isFinite(Number(r.citescore))).slice(0,10);
   $("count").textContent=arr.length+(arr.length===1?" revista encontrada":" revistas encontradas")+" de "+ALL.length;
   renderActiveFilters();
-  const visible=arr.slice(0,CATALOG_VISIBLE);
-  const expand=$("catalog-expand"),hasMore=visible.length<arr.length;expand.hidden=arr.length<=6;expand.setAttribute("aria-expanded",String(CATALOG_VISIBLE>6));expand.textContent=hasMore?"Ver mais "+Math.min(6,arr.length-visible.length)+" revistas ("+visible.length+" de "+arr.length+") ↓":"Mostrar apenas 6 registros ↑";
+  const perPageVal=$("per-page-select")?$("per-page-select").value:String(PER_PAGE);
+  const perPage=perPageVal==="all"?Math.max(1,arr.length):(parseInt(perPageVal,10)||PER_PAGE);
+  const totalPages=Math.max(1,Math.ceil(arr.length/perPage));
+  if(CURRENT_PAGE>totalPages)CURRENT_PAGE=totalPages;
+  if(CURRENT_PAGE<1)CURRENT_PAGE=1;
+  const startIndex=(CURRENT_PAGE-1)*perPage;
+  const visible=arr.slice(startIndex,startIndex+perPage);
+  const expand=$("catalog-expand");if(expand)expand.hidden=true;
+  renderPagination(arr.length,perPage,totalPages);
   $("lista").innerHTML=visible.map(r=>{
     const url=safeUrl(r.url_ficha||r.url);
+    const scopusUrl=r.scopusSourceId?"https://www.scopus.com/sourceid/"+encodeURIComponent(r.scopusSourceId):"";
     const metrics=[["Maior percentil",r.maiorPercentil===null?"A confirmar":r.maiorPercentil+"%"],["Quartil",r.sjr],["CiteScore",r.citescore],["Impacto",r.fatorImpacto]].filter(([,v])=>v!==null&&v!==undefined&&v!=="").map(([name,v])=>'<span><b>'+name+'</b> '+esc(v)+'</span>').join("");
-    return '<article class="journal-card" id="revista-'+esc(r.id)+'"><div class="journal-card-top"><span class="tier criterion-badge status-'+esc(r.criterioPlanilha?.status||"confirmar")+'">'+esc(compactStatus(r))+'</span><label class="cmp"><input type="checkbox" data-id="'+esc(r.id)+'" '+(SELECTED.has(String(r.id))?"checked":"")+'> Comparar</label></div><h3>'+esc(r.titulo)+'</h3><p class="journal-area">'+esc(r.area||"Área não informada")+'</p><div class="journal-metrics">'+metrics+'</div><p class="journal-cost"><strong>Custo:</strong> '+esc(compactCost(r))+'</p>'+journalCriteriaHTML(r,esc)+journalAssessmentHTML(r,esc,$("submission-date").value,$("publication-target").value)+'<div class="journal-actions journal-card-actions"><a class="journal-record-link" href="ficha-revista.html?id='+encodeURIComponent(r.id)+'" target="_blank" rel="noopener">Ficha completa ↗</a>'+(url?'<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">'+(r.tipoLink?"Fonte externa":"Site da revista")+' ↗</a>':"")+'</div></article>';
+    return '<article class="journal-card" id="revista-'+esc(r.id)+'"><div class="journal-card-top"><span class="tier criterion-badge status-'+esc(r.criterioPlanilha?.status||"confirmar")+'">'+esc(compactStatus(r))+'</span><label class="cmp"><input type="checkbox" data-id="'+esc(r.id)+'" '+(SELECTED.has(String(r.id))?"checked":"")+'> Comparar</label></div><h3>'+esc(r.titulo)+'</h3><p class="journal-area">'+esc(r.area||"Área não informada")+'</p><div class="journal-metrics">'+metrics+'</div><p class="journal-cost"><strong>Custo:</strong> '+esc(compactCost(r))+'</p>'+journalCriteriaHTML(r,esc)+journalAssessmentHTML(r,esc,$("submission-date").value,$("publication-target").value)+'<div class="journal-actions journal-card-actions"><a class="journal-record-link" href="ficha-revista.html?id='+encodeURIComponent(r.id)+'" target="_blank" rel="noopener">Ficha completa ↗</a>'+(scopusUrl?'<a class="journal-scopus-link" href="'+esc(scopusUrl)+'" target="_blank" rel="noopener noreferrer">Notas na Scopus (oficial) ↗</a>':"")+(url?'<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">'+(r.tipoLink?"Fonte externa":"Site da revista")+' ↗</a>':"")+'</div></article>';
   }).join("")||'<div class="catalog-empty"><h3>Nenhuma revista com essas escolhas</h3><p>Algumas informações ainda estão em conferência. Remova uma escolha acima ou veja o catálogo completo.</p><button type="button" id="empty-clear">Ver todas as revistas</button></div>';
   if($("empty-clear"))$("empty-clear").onclick=()=>$("limpar").click();
   renderCompare();
@@ -40,9 +97,9 @@ function renderActiveFilters(){
   const button=document.createElement("button"),value=field.selectedOptions?.[0]?.textContent||field.value;
   const label=(field.dataset.filterLabel||id)+": "+value;
   button.type="button";button.textContent=label+" ×";button.setAttribute("aria-label","Remover filtro "+label);
-  button.onclick=()=>{field.value="";CATALOG_VISIBLE=6;CATALOG_TOP10=false;render();$(id).focus()};target.append(button);
+  button.onclick=()=>{field.value="";CURRENT_PAGE=1;CATALOG_TOP10=false;render();$(id).focus()};target.append(button);
  }
- if($("program-only").checked){const button=document.createElement("button");button.type="button";button.textContent="Quatro critérios conferidos ×";button.setAttribute("aria-label","Remover filtro dos quatro critérios");button.onclick=()=>{$("program-only").checked=false;CATALOG_VISIBLE=6;render();$("program-only").focus()};target.append(button)}
+ if($("program-only").checked){const button=document.createElement("button");button.type="button";button.textContent="Quatro critérios conferidos ×";button.setAttribute("aria-label","Remover filtro dos quatro critérios");button.onclick=()=>{$("program-only").checked=false;CURRENT_PAGE=1;render();$("program-only").focus()};target.append(button)}
  target.hidden=!target.childElementCount;
 }
 function renderCompare(){
@@ -50,7 +107,7 @@ function renderCompare(){
   $("cmp-tabela").innerHTML=arr.length?comparisonHTML(arr,esc):'<p class="compare-hint">Marque “Comparar” nos cartões do <a href="#revistas">catálogo</a> para visualizar as revistas aqui.</p>';
 }
 const JOURNAL_FIELD_LABELS={...metricLabels,id:"Identificador no catálogo",titulo:"Revista",area:"Área",sjr:"Quartil SJR informado",idioma:"Idioma",custo:"Custo informado",alinhamento:"Alinhamento com a pesquisa",url:"Site da revista",url_ficha:"Link da ficha",tier:"Faixa de curadoria",citescore:"CiteScore informado",fatorImpacto:"Fator de impacto informado",issn:"ISSN",editora:"Editora",escopo:"Escopo editorial informado",observacoes:"Observações",check:"Adequação do manuscrito",pergunta:"Pergunta-chave de adequação",obrigatorios:"Requisitos importantes",evitar:"Quando esta revista pode não ser adequada",ano:"Ano do indicador",fonte:"Fonte",fonteIndicador:"Fonte do indicador",baseAtualizada:"Referência da base"};
-Object.assign(JOURNAL_FIELD_LABELS,{"enquadramento": "Enquadramento na planilha", "criterioPlanilha": "Critério da planilha", "status": "Situação", "regra": "Regra aplicada", "anoQuartil": "Ano do quartil informado", "indicadoresPlanilha": "Indicadores originais da planilha", "anoOutrosIndicadores": "Ano dos demais indicadores", "indiceSjr": "Índice SJR (valor)", "fatorImpacto5Anos": "Fator de impacto de 5 anos", "snip": "SNIP", "articleInfluenceScore": "Article Influence Score", "fontesCadastro": "Fontes de cadastro", "arquivo": "Arquivo de origem", "aba": "Aba", "linha": "Linha", "campos": "Campos", "documentosEquipe": "Documentos da equipe", "tipo": "Tipo", "conferencia": "Situação da conferência", "conferenciasOnline": "Campos conferidos em fontes online", "consultadoEm": "Data da consulta", "anoIndicador": "Ano de referência do indicador", "correcoesDocumentadas": "Correções documentadas", "campo": "Campo", "anterior": "Valor anterior", "atual": "Valor atualizado", "pendenciasConferencia": "Pendências de conferência", "valorPlanilha": "Valor da planilha", "valorObservadoOnline": "Valor observado na fonte online", "motivo": "Motivo da pendência", "atualizadoEm": "Cadastro atualizado em", "statusConferencia": "Situação da conferência", "origemCadastro": "Origem do cadastro", "modeloCusto": "Modelo de custo", "modeloPublicacao": "Modelo de publicação", "tiposArtigo": "Tipos de artigo", "limiteManuscrito": "Limite do manuscrito", "prazoPrimeiraDecisao": "Primeira decisão informada pela editora", "prazoPrimeiraDecisaoPlanilha": "Primeira decisão / estimativa da planilha", "prazoPublicacaoPlanilha": "Prazo de publicação / estimativa da planilha", "taxaAceitacaoPercentual": "Taxa de aceitação (%)", "urlInstrucoes": "Instruções aos autores", "dicasEquipe": "Orientações da equipe", "observacaoVarredura": "Observação da varredura", "situacaoOriginalPlanilha": "Situação original na planilha", "tipoLink": "Tipo de endereço externo", "anotacaoEquipe": "Anotação da equipe", "origem": "Origem geográfica", "observacao": "Observação"});
+Object.assign(JOURNAL_FIELD_LABELS,{"enquadramento": "Enquadramento na planilha", "criterioPlanilha": "Critério da planilha", "status": "Situação", "regra": "Regra aplicada", "anoQuartil": "Ano do quartil informado", "indicadoresPlanilha": "Indicadores originais da planilha", "anoOutrosIndicadores": "Ano dos demais indicadores", "indiceSjr": "Índice SJR (valor)", "fatorImpacto5Anos": "Fator de impacto de 5 anos", "snip": "SNIP", "articleInfluenceScore": "Article Influence Score", "fontesCadastro": "Fontes de cadastro", "arquivo": "Arquivo de origem", "aba": "Aba", "linha": "Linha", "campos": "Campos", "documentosEquipe": "Documentos da equipe", "tipo": "Tipo", "conferencia": "Situação da conferência", "conferenciasOnline": "Campos conferidos em fontes online", "consultadoEm": "Data da consulta", "anoIndicador": "Ano de referência do indicador", "correcoesDocumentadas": "Correções documentadas", "campo": "Campo", "anterior": "Valor anterior", "atual": "Valor atualizado", "pendenciasConferencia": "Pendências de conferência", "valorPlanilha": "Valor da planilha", "valorObservadoOnline": "Valor observado na fonte online", "motivo": "Motivo da pendência", "atualizadoEm": "Cadastro atualizado em", "statusConferencia": "Situação da conferência", "origemCadastro": "Origem do cadastro", "modeloCusto": "Modelo de custo", "modeloPublicacao": "Modelo de publicação", "tiposArtigo": "Tipos de artigo", "limiteManuscrito": "Limite do manuscrito", "prazoPrimeiraDecisao": "Primeira decisão informada pela editora", "prazoPrimeiraDecisaoPlanilha": "Primeira decisão / estimativa da planilha", "prazoPublicacaoPlanilha": "Prazo de publicação / estimativa da planilha", "taxaAceitacaoPercentual": "Taxa de aceitação (%)", "urlInstrucoes": "Instruções aos autores", "dicasEquipe": "Orientações da equipe", "observacaoVarredura": "Observação da varredura", "situacaoOriginalPlanilha": "Situação original na planilha", "tipoLink": "Tipo de endereço externo", "anotacaoEquipe": "Anotação da equipe", "origem": "Origem geográfica", "observacao": "Observação", "scopusSourceId": "Código oficial na Scopus (Source ID)", "anoCiteScore": "Ano do CiteScore", "percentisCiteScorePorCategoria": "Percentis CiteScore na Scopus por categoria", "posicao": "Posição no ranking da categoria", "total": "Total de revistas na categoria", "linhaArquivo": "Linha na planilha Scopus", "urlArquivo": "Planilha pública consultada", "tituloNaFonte": "Título registrado na Scopus", "sha256Arquivo": "Hash SHA-256 do arquivo fonte"});
 JOURNAL_FIELD_LABELS.url="Página do periódico ou fonte de identificação";
 function fullRecordEntries(value,prefix=""){
   const entries=[];
@@ -155,9 +212,10 @@ function makeAllCatalogSection(question){
     const relation=document.createElement("span");relation.className=score?"catalog-relevance direct":"catalog-relevance adjacent";relation.textContent=score?"Tema relacionado à busca":"Tema próximo à área do projeto";card.append(relation);const criterion=document.createElement("p");criterion.className="catalog-criterion status-"+(r.criterioPlanilha?.status||"confirmar");criterion.textContent=r.enquadramento||"Enquadramento a confirmar";card.append(criterion);
     const area=document.createElement("p");area.textContent=r.area||"Área não informada";card.append(area);
     const description=document.createElement("p");description.textContent=r.alinhamento||r.observacoes||r.escopo||"O catálogo não contém descrição de escopo para esta revista.";card.append(description);
-    const metrics=document.createElement("p");metrics.className="ai-catalog-metrics";metrics.textContent="SJR: "+fmt(r.sjr)+" · CiteScore: "+fmt(r.citescore)+" · Idioma: "+fmt(r.idioma);card.append(metrics);
+    const metrics=document.createElement("p");metrics.className="ai-catalog-metrics";metrics.textContent="SJR: "+fmt(r.sjr)+" · CiteScore: "+fmt(r.citescore)+" · Maior percentil: "+(r.maiorPercentil==null?"A confirmar":r.maiorPercentil+"%")+" · Idioma: "+fmt(r.idioma);card.append(metrics);
     const cost=document.createElement("p");cost.className="ai-catalog-cost";cost.textContent="Custo informado: "+fmt(r.custo);card.append(cost);
     card.insertAdjacentHTML("beforeend",journalCriteriaHTML(r,esc));card.append(makeFullRecord(r));
+    if(r.scopusSourceId){const scopus=document.createElement("a");scopus.href="https://www.scopus.com/sourceid/"+encodeURIComponent(r.scopusSourceId);scopus.target="_blank";scopus.rel="noopener noreferrer";scopus.textContent="Ver notas no site oficial da Scopus ↗";card.append(scopus)}
     const url=safeUrl(r.url_ficha||r.url);if(url){const a=document.createElement("a");a.href=url;a.target="_blank";a.rel="noopener noreferrer";a.textContent="Abrir site da revista ↗";card.append(a)}
     grid.append(card);
   });
@@ -204,7 +262,7 @@ function presentAI(raw,question,discovery,directMatches=null){
   baseSummary.textContent=matched.length+(matched.length===1?" revista da base mencionada":" revistas da base mencionadas")+" nesta orientação · "+selectionCatalog().length+" na seleção da planilha · "+ALL.length+" cadastradas no total, incluindo registros fora do recorte ou a confirmar.";baseSection.append(baseSummary);
   if(matched.length){
     const grid=document.createElement("div");grid.className="ai-rich-grid";
-    matched.forEach(r=>{const card=document.createElement("article");card.className="ai-rich-card";const name=document.createElement("h4");name.textContent=r.titulo;card.append(name);const recordLink=document.createElement("a");recordLink.href="ficha-revista.html?id="+encodeURIComponent(r.id);recordLink.textContent="Abrir ficha completa";card.append(recordLink);card.insertAdjacentHTML("beforeend",journalCriteriaHTML(r,esc));card.append(makeFullRecord(r));const origin=document.createElement("span");origin.className="origin-internal";origin.textContent="Base do projeto";card.append(origin);const area=document.createElement("p");area.textContent=r.area||"Área não informada";card.append(area);const metrics=document.createElement("p");metrics.className="ai-rich-metrics";metrics.textContent="SJR: "+fmt(r.sjr)+" · CiteScore: "+fmt(r.citescore);card.append(metrics);const cost=document.createElement("p");cost.textContent="Custo informado: "+fmt(r.custo);card.append(cost);const url=safeUrl(r.url_ficha||r.url);if(url){const a=document.createElement("a");a.href=url;a.target="_blank";a.rel="noopener noreferrer";a.textContent="Abrir site da revista ↗";card.append(a);}grid.append(card)});
+    matched.forEach(r=>{const card=document.createElement("article");card.className="ai-rich-card";const name=document.createElement("h4");name.textContent=r.titulo;card.append(name);const recordLink=document.createElement("a");recordLink.href="ficha-revista.html?id="+encodeURIComponent(r.id);recordLink.textContent="Abrir ficha completa";card.append(recordLink);card.insertAdjacentHTML("beforeend",journalCriteriaHTML(r,esc));card.append(makeFullRecord(r));const origin=document.createElement("span");origin.className="origin-internal";origin.textContent="Base do projeto";card.append(origin);const area=document.createElement("p");area.textContent=r.area||"Área não informada";card.append(area);const metrics=document.createElement("p");metrics.className="ai-rich-metrics";metrics.textContent="SJR: "+fmt(r.sjr)+" · CiteScore: "+fmt(r.citescore)+" · Maior percentil: "+(r.maiorPercentil==null?"A confirmar":r.maiorPercentil+"%");card.append(metrics);const cost=document.createElement("p");cost.textContent="Custo informado: "+fmt(r.custo);card.append(cost);if(r.scopusSourceId){const scopus=document.createElement("a");scopus.href="https://www.scopus.com/sourceid/"+encodeURIComponent(r.scopusSourceId);scopus.target="_blank";scopus.rel="noopener noreferrer";scopus.textContent="Ver notas no site oficial da Scopus ↗";card.append(scopus);}const url=safeUrl(r.url_ficha||r.url);if(url){const a=document.createElement("a");a.href=url;a.target="_blank";a.rel="noopener noreferrer";a.textContent="Abrir site da revista ↗";card.append(a);}grid.append(card)});
     baseSection.append(grid);
   }else{
     const empty=document.createElement("p");empty.className="ai-base-empty";empty.textContent="A orientação não citou um título específico da base. Consulte os registros dos filtros ativos abaixo; amplie os filtros se a lista estiver vazia.";baseSection.append(empty);
@@ -296,14 +354,24 @@ async function init(){
   BASE=data.fonteArquivo||data.baseAtualizada||"base do projeto";
   const checked=ALL.filter(r=>Array.isArray(r.conferenciasOnline)&&r.conferenciasOnline.length).length;
   $("catalog-summary").textContent=ALL.length+" revistas para explorar e comparar";$("selecao-option").textContent="Seleção da equipe ("+selectionCatalog().length+")";
-  if(/^#revista-/.test(location.hash)){$("criterio").value="";CATALOG_VISIBLE=Infinity;}
+  if(/^#revista-/.test(location.hash)){
+    $("criterio").value="";
+    const targetId=location.hash.replace("#revista-","");
+    const catalogList=searchCatalog();
+    const idx=catalogList.findIndex(r=>String(r.id)===targetId);
+    if(idx!==-1){
+      const perPageVal=$("per-page-select")?$("per-page-select").value:String(PER_PAGE);
+      const perPage=perPageVal==="all"?catalogList.length:(parseInt(perPageVal,10)||PER_PAGE);
+      CURRENT_PAGE=Math.floor(idx/perPage)+1;
+    }
+  }
   [...new Set(ALL.map(r=>r.area).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"pt-BR")).forEach(v=>$("area").add(new Option(v,v)));
-  const resetTop10=()=>{CATALOG_TOP10=false;CATALOG_VISIBLE=6;document.querySelectorAll("[data-fast-filter]").forEach(b=>b.setAttribute("aria-pressed","false"))};
-  [...filterIds,"q","criterio","area","sjr","idioma","custo","score","ord"].forEach(id=>$(id).addEventListener("input",()=>{resetTop10();render()}));
-  $("limpar").onclick=()=>{$("program-only").checked=false;[...filterIds,"q","criterio","area","sjr","idioma","custo","score"].forEach(id=>$(id).value="");resetTop10();render()};
+  const resetCatalogPagination=()=>{CATALOG_TOP10=false;CURRENT_PAGE=1;document.querySelectorAll("[data-fast-filter]").forEach(b=>b.setAttribute("aria-pressed","false"))};
+  [...filterIds,"q","criterio","area","sjr","idioma","custo","score","ord"].forEach(id=>$(id).addEventListener("input",()=>{resetCatalogPagination();render()}));
+  $("limpar").onclick=()=>{$("program-only").checked=false;[...filterIds,"q","criterio","area","sjr","idioma","custo","score"].forEach(id=>$(id).value="");resetCatalogPagination();render()};
   document.querySelectorAll("[data-fast-filter]").forEach(button=>button.addEventListener("click",()=>{
     [...filterIds,"q","criterio","area","sjr","idioma","custo","score"].forEach(id=>$(id).value="");
-    CATALOG_TOP10=false;CATALOG_VISIBLE=6;
+    resetCatalogPagination();
     const filter=button.dataset.fastFilter;
     if(filter!=="clear"&&filter!=="all")$("criterio").value="selecao";
     if(filter==="q1")$("sjr").value="Q1";
@@ -313,8 +381,23 @@ async function init(){
     document.querySelectorAll("[data-fast-filter]").forEach(b=>b.setAttribute("aria-pressed",String(filter!=="clear"&&b===button)));
     render();$("lista").scrollIntoView({behavior:"smooth",block:"start"});
   }));
-  ["program-only","submission-date","publication-target"].forEach(id=>$(id).addEventListener("change",()=>{CATALOG_VISIBLE=6;render()}));
-  $("catalog-expand").addEventListener("click",()=>{CATALOG_VISIBLE=CATALOG_VISIBLE<$("count").textContent.match(/\d+/)[0]?CATALOG_VISIBLE+6:6;render();if(CATALOG_VISIBLE===6)$("revistas").scrollIntoView({behavior:"smooth",block:"start"})});
+  ["program-only","submission-date","publication-target"].forEach(id=>$(id).addEventListener("change",()=>{CURRENT_PAGE=1;render()}));
+  $("per-page-select")?.addEventListener("change",e=>{PER_PAGE=e.target.value==="all"?"all":(parseInt(e.target.value,10)||24);CURRENT_PAGE=1;render()});
+  $("pagination-first")?.addEventListener("click",()=>{if(CURRENT_PAGE>1){CURRENT_PAGE=1;render();$("revistas")?.scrollIntoView({behavior:"smooth",block:"start"})}});
+  $("pagination-prev")?.addEventListener("click",()=>{if(CURRENT_PAGE>1){CURRENT_PAGE--;render();$("revistas")?.scrollIntoView({behavior:"smooth",block:"start"})}});
+  $("pagination-next")?.addEventListener("click",()=>{
+    const perPageVal=$("per-page-select")?$("per-page-select").value:String(PER_PAGE);
+    const perPage=perPageVal==="all"?Infinity:(parseInt(perPageVal,10)||PER_PAGE);
+    const totalPages=Math.max(1,Math.ceil(searchCatalog().length/perPage));
+    if(CURRENT_PAGE<totalPages){CURRENT_PAGE++;render();$("revistas")?.scrollIntoView({behavior:"smooth",block:"start"})}
+  });
+  $("pagination-last")?.addEventListener("click",()=>{
+    const perPageVal=$("per-page-select")?$("per-page-select").value:String(PER_PAGE);
+    const perPage=perPageVal==="all"?Infinity:(parseInt(perPageVal,10)||PER_PAGE);
+    const totalPages=Math.max(1,Math.ceil(searchCatalog().length/perPage));
+    if(CURRENT_PAGE<totalPages){CURRENT_PAGE=totalPages;render();$("revistas")?.scrollIntoView({behavior:"smooth",block:"start"})}
+  });
+  $("catalog-expand")?.addEventListener("click",()=>{render()});
   $("lista").addEventListener("change",e=>{const id=e.target.dataset.id;if(!id)return;if(e.target.checked){if(SELECTED.size>=4){e.target.checked=false;alert("Selecione até quatro revistas.");return}SELECTED.add(id)}else SELECTED.delete(id);renderCompare()});
   $("csv").onclick=exportCsv;$("ai-search-form").addEventListener("submit",e=>{e.preventDefault();askAI()});
   const predatoryToggle=$("predatory-toggle"),predatoryDetails=$("predatory-details");predatoryToggle.addEventListener("click",()=>{const open=predatoryDetails.hidden;predatoryDetails.hidden=!open;predatoryToggle.setAttribute("aria-expanded",String(open));predatoryToggle.textContent=open?"Ocultar sinais de alerta":"Ver sinais de alerta"});
